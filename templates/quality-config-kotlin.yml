@@ -1,0 +1,29 @@
+# Code Quality Configuration
+# Copy this file to your repo: .github/quality-config.yml
+
+# ============================================================
+# KOTLIN ANDROID REPO TEMPLATE
+# ============================================================
+
+languages:
+  - kotlin
+
+tests:
+  enabled: true
+  
+  # Commands to run before tests
+  setup:
+    - "chmod +x gradlew"
+  
+  # Test command with coverage (using Jacoco)
+  command: "./gradlew testDebugUnitTest jacocoTestReport"
+  
+  # Path to coverage report (Jacoco XML format)
+  coverage_file: "app/build/reports/jacoco/jacocoTestReport/jacocoTestReport.xml"
+  
+  # Alternative path structure
+  # coverage_file: "build/reports/jacoco/test/jacocoTestReport.xml"
+
+# E2E tests requirement
+e2e:
+  required: false  # Set to true if you have Espresso/UI tests

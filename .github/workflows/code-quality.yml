@@ -1,0 +1,443 @@
+name: Code Quality Check
+
+on:
+  workflow_call:
+    inputs:
+      threshold:
+        description: 'Minimum score to pass (0-100)'
+        type: number
+        default: 70
+    secrets:
+      GOOGLE_SHEETS_CREDENTIALS:
+        required: true
+      GOOGLE_SHEET_ID:
+        required: true
+
+  # Allow manual trigger with PR number
+  workflow_dispatch:
+    inputs:
+      pr_number:
+        description: 'PR number to analyze'
+        required: true
+        type: string
+      threshold:
+        description: 'Minimum score to pass (0-100)'
+        type: number
+        default: 70
+
+jobs:
+  quality-check:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      pull-requests: write
+      issues: write
+
+    steps:
+      # ============================================================
+      # SETUP
+      # ============================================================
+      
+      - name: Checkout PR code
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+
+      - name: Checkout quality scripts
+        uses: actions/checkout@v4
+        with:
+          repository: ${{ github.repository_owner }}/github-workflows
+          path: .quality-scripts
+          token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+
+      - name: Install Python dependencies
+        run: |
+          pip install -r .quality-scripts/scripts/requirements.txt
+
+      - name: Install global tools
+        run: |
+          npm install -g jscpd
+          pip install ruff
+
+      # ============================================================
+      # DETECT CONTEXT
+      # ============================================================
+
+      - name: Get PR information
+        id: pr-info
+        run: |
+          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
+            PR_NUMBER="${{ inputs.pr_number }}"
+          else
+            PR_NUMBER="${{ github.event.pull_request.number }}"
+          fi
+          echo "pr_number=$PR_NUMBER" >> $GITHUB_OUTPUT
+          
+          # Get PR details via GitHub API
+          PR_DATA=$(gh pr view $PR_NUMBER --json title,author,headRefName,baseRefName,url)
+          echo "pr_title=$(echo $PR_DATA | jq -r '.title')" >> $GITHUB_OUTPUT
+          echo "pr_author=$(echo $PR_DATA | jq -r '.author.login')" >> $GITHUB_OUTPUT
+          echo "pr_url=$(echo $PR_DATA | jq -r '.url')" >> $GITHUB_OUTPUT
+          echo "head_branch=$(echo $PR_DATA | jq -r '.headRefName')" >> $GITHUB_OUTPUT
+          echo "base_branch=$(echo $PR_DATA | jq -r '.baseRefName')" >> $GITHUB_OUTPUT
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Get changed files
+        id: changed-files
+        run: |
+          BASE_BRANCH="${{ steps.pr-info.outputs.base_branch }}"
+          git fetch origin $BASE_BRANCH --depth=1
+          
+          # Get list of changed files
+          git diff --name-only origin/$BASE_BRANCH...HEAD > .quality/changed_files.txt
+          
+          # Count changes
+          LINES_ADDED=$(git diff --numstat origin/$BASE_BRANCH...HEAD | awk '{sum += $1} END {print sum+0}')
+          LINES_REMOVED=$(git diff --numstat origin/$BASE_BRANCH...HEAD | awk '{sum += $2} END {print sum+0}')
+          FILES_COUNT=$(wc -l < .quality/changed_files.txt | tr -d ' ')
+          
+          echo "files_count=$FILES_COUNT" >> $GITHUB_OUTPUT
+          echo "lines_added=$LINES_ADDED" >> $GITHUB_OUTPUT
+          echo "lines_removed=$LINES_REMOVED" >> $GITHUB_OUTPUT
+          
+          # Detect languages
+          LANGUAGES=""
+          if grep -qE '\.py$' .quality/changed_files.txt 2>/dev/null; then
+            LANGUAGES="${LANGUAGES}python,"
+          fi
+          if grep -qE '\.(js|jsx|ts|tsx)$' .quality/changed_files.txt 2>/dev/null; then
+            LANGUAGES="${LANGUAGES}javascript,"
+          fi
+          if grep -qE '\.swift$' .quality/changed_files.txt 2>/dev/null; then
+            LANGUAGES="${LANGUAGES}swift,"
+          fi
+          if grep -qE '\.(kt|java)$' .quality/changed_files.txt 2>/dev/null; then
+            LANGUAGES="${LANGUAGES}kotlin,"
+          fi
+          LANGUAGES=$(echo $LANGUAGES | sed 's/,$//')
+          echo "languages=$LANGUAGES" >> $GITHUB_OUTPUT
+          
+          echo "Changed files:"
+          cat .quality/changed_files.txt
+          echo "Languages detected: $LANGUAGES"
+        shell: bash
+
+      - name: Create output directory
+        run: mkdir -p .quality
+
+      - name: Load repo config
+        id: config
+        run: |
+          if [ -f ".github/quality-config.yml" ]; then
+            echo "config_exists=true" >> $GITHUB_OUTPUT
+            cp .github/quality-config.yml .quality/config.yml
+          else
+            echo "config_exists=false" >> $GITHUB_OUTPUT
+            # Create default config
+            cat > .quality/config.yml << 'EOF'
+          languages: auto
+          tests:
+            enabled: false
+          e2e:
+            required: false
+          EOF
+          fi
+
+      # ============================================================
+      # LINTING
+      # ============================================================
+
+      - name: Run Python linting (Ruff)
+        if: contains(steps.changed-files.outputs.languages, 'python')
+        continue-on-error: true
+        run: |
+          # Get only Python files from changed files
+          grep -E '\.py$' .quality/changed_files.txt > .quality/python_files.txt || true
+          
+          if [ -s .quality/python_files.txt ]; then
+            echo "Analyzing Python files:"
+            cat .quality/python_files.txt
+            
+            # Run ruff with JSON output
+            ruff check $(cat .quality/python_files.txt | tr '\n' ' ') \
+              --config .quality-scripts/configs/ruff.toml \
+              --output-format json > .quality/ruff-results.json 2>&1 || true
+            
+            echo "Ruff results:"
+            cat .quality/ruff-results.json | head -100
+          fi
+
+      - name: Run JavaScript/TypeScript linting (ESLint)
+        if: contains(steps.changed-files.outputs.languages, 'javascript')
+        continue-on-error: true
+        run: |
+          # Get only JS/TS files from changed files
+          grep -E '\.(js|jsx|ts|tsx)$' .quality/changed_files.txt > .quality/js_files.txt || true
+          
+          if [ -s .quality/js_files.txt ]; then
+            echo "Analyzing JavaScript/TypeScript files:"
+            cat .quality/js_files.txt
+            
+            # Install ESLint and plugins
+            npm install eslint @typescript-eslint/parser @typescript-eslint/eslint-plugin eslint-plugin-sonarjs --save-dev 2>/dev/null || true
+            
+            # Run ESLint with JSON output
+            npx eslint $(cat .quality/js_files.txt | tr '\n' ' ') \
+              --config .quality-scripts/configs/eslint.config.js \
+              --format json > .quality/eslint-results.json 2>&1 || true
+            
+            echo "ESLint results:"
+            cat .quality/eslint-results.json | head -100
+          fi
+
+      - name: Run Swift linting (SwiftLint)
+        if: contains(steps.changed-files.outputs.languages, 'swift')
+        continue-on-error: true
+        run: |
+          # Install SwiftLint
+          if command -v swiftlint &> /dev/null; then
+            echo "SwiftLint already installed"
+          else
+            brew install swiftlint 2>/dev/null || echo "SwiftLint installation skipped"
+          fi
+          
+          # Get only Swift files from changed files
+          grep -E '\.swift$' .quality/changed_files.txt > .quality/swift_files.txt || true
+          
+          if [ -s .quality/swift_files.txt ] && command -v swiftlint &> /dev/null; then
+            echo "Analyzing Swift files:"
+            cat .quality/swift_files.txt
+            
+            swiftlint lint --config .quality-scripts/configs/swiftlint.yml \
+              --reporter json $(cat .quality/swift_files.txt | tr '\n' ' ') > .quality/swiftlint-results.json 2>&1 || true
+          fi
+
+      - name: Run Kotlin/Java linting (Detekt)
+        if: contains(steps.changed-files.outputs.languages, 'kotlin')
+        continue-on-error: true
+        run: |
+          # Get only Kotlin/Java files from changed files
+          grep -E '\.(kt|java)$' .quality/changed_files.txt > .quality/kotlin_files.txt || true
+          
+          if [ -s .quality/kotlin_files.txt ]; then
+            echo "Analyzing Kotlin/Java files:"
+            cat .quality/kotlin_files.txt
+            
+            # Download detekt CLI
+            DETEKT_VERSION="1.23.4"
+            curl -sSL "https://github.com/detekt/detekt/releases/download/v${DETEKT_VERSION}/detekt-cli-${DETEKT_VERSION}.zip" -o detekt.zip
+            unzip -q detekt.zip -d detekt
+            
+            # Run detekt
+            java -jar detekt/detekt-cli-${DETEKT_VERSION}/lib/detekt-cli-${DETEKT_VERSION}.jar \
+              --config .quality-scripts/configs/detekt.yml \
+              --input $(cat .quality/kotlin_files.txt | tr '\n' ',') \
+              --report json:.quality/detekt-results.json || true
+          fi
+
+      # ============================================================
+      # DUPLICATION CHECK
+      # ============================================================
+
+      - name: Run duplication check (jscpd)
+        continue-on-error: true
+        run: |
+          # Run jscpd on changed files' directories
+          DIRS=$(cat .quality/changed_files.txt | xargs -I {} dirname {} | sort -u | tr '\n' ' ')
+          
+          if [ -n "$DIRS" ]; then
+            jscpd $DIRS \
+              --config .quality-scripts/configs/jscpd.json \
+              --reporters json \
+              --output .quality/ || true
+            
+            if [ -f ".quality/jscpd-report.json" ]; then
+              echo "Duplication results:"
+              cat .quality/jscpd-report.json | head -50
+            fi
+          fi
+
+      # ============================================================
+      # TESTS & COVERAGE
+      # ============================================================
+
+      - name: Run tests and coverage
+        id: tests
+        continue-on-error: true
+        run: |
+          python .quality-scripts/scripts/run_tests.py \
+            --config .quality/config.yml \
+            --changed-files .quality/changed_files.txt \
+            --output .quality/test-results.json
+
+      # ============================================================
+      # CALCULATE SCORE
+      # ============================================================
+
+      - name: Calculate score
+        id: score
+        run: |
+          python .quality-scripts/scripts/calculate_score.py \
+            --changed-files .quality/changed_files.txt \
+            --config .quality/config.yml \
+            --ruff-results .quality/ruff-results.json \
+            --eslint-results .quality/eslint-results.json \
+            --swiftlint-results .quality/swiftlint-results.json \
+            --detekt-results .quality/detekt-results.json \
+            --jscpd-results .quality/jscpd-report.json \
+            --test-results .quality/test-results.json \
+            --output .quality/score.json
+          
+          # Read score for GitHub output
+          SCORE=$(cat .quality/score.json | jq -r '.final_score')
+          PASSED=$(cat .quality/score.json | jq -r '.passed')
+          
+          echo "score=$SCORE" >> $GITHUB_OUTPUT
+          echo "passed=$PASSED" >> $GITHUB_OUTPUT
+
+      # ============================================================
+      # GENERATE COMMENT
+      # ============================================================
+
+      - name: Generate PR comment
+        run: |
+          python .quality-scripts/scripts/generate_comment.py \
+            --score-file .quality/score.json \
+            --output .quality/comment.md
+
+      - name: Post comment on PR
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const fs = require('fs');
+            const comment = fs.readFileSync('.quality/comment.md', 'utf8');
+            
+            await github.rest.issues.createComment({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              issue_number: ${{ steps.pr-info.outputs.pr_number }},
+              body: comment
+            });
+
+      # ============================================================
+      # LABELS
+      # ============================================================
+
+      - name: Update labels
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const score = ${{ steps.score.outputs.score }};
+            const prNumber = ${{ steps.pr-info.outputs.pr_number }};
+            
+            // Define label based on score
+            let newLabel;
+            if (score >= 85) {
+              newLabel = 'quality:excellent';
+            } else if (score >= 70) {
+              newLabel = 'quality:good';
+            } else if (score >= 55) {
+              newLabel = 'quality:needs-work';
+            } else {
+              newLabel = 'quality:poor';
+            }
+            
+            // Remove old quality labels
+            const { data: labels } = await github.rest.issues.listLabelsOnIssue({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              issue_number: prNumber
+            });
+            
+            for (const label of labels) {
+              if (label.name.startsWith('quality:')) {
+                await github.rest.issues.removeLabel({
+                  owner: context.repo.owner,
+                  repo: context.repo.repo,
+                  issue_number: prNumber,
+                  name: label.name
+                });
+              }
+            }
+            
+            // Ensure label exists
+            try {
+              await github.rest.issues.getLabel({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                name: newLabel
+              });
+            } catch (e) {
+              const colors = {
+                'quality:excellent': '0e8a16',
+                'quality:good': '1d76db',
+                'quality:needs-work': 'fbca04',
+                'quality:poor': 'b60205',
+                'quality:error': '808080'
+              };
+              await github.rest.issues.createLabel({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                name: newLabel,
+                color: colors[newLabel] || '808080'
+              });
+            }
+            
+            // Add new label
+            await github.rest.issues.addLabels({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              issue_number: prNumber,
+              labels: [newLabel]
+            });
+
+      # ============================================================
+      # LOG TO GOOGLE SHEETS
+      # ============================================================
+
+      - name: Log to Google Sheets
+        if: always()
+        continue-on-error: true
+        run: |
+          python .quality-scripts/scripts/log_to_sheets.py \
+            --score-file .quality/score.json \
+            --repo "${{ github.repository }}" \
+            --pr-number "${{ steps.pr-info.outputs.pr_number }}" \
+            --pr-title "${{ steps.pr-info.outputs.pr_title }}" \
+            --pr-url "${{ steps.pr-info.outputs.pr_url }}" \
+            --author "${{ steps.pr-info.outputs.pr_author }}" \
+            --base-branch "${{ steps.pr-info.outputs.base_branch }}" \
+            --head-branch "${{ steps.pr-info.outputs.head_branch }}" \
+            --files-changed "${{ steps.changed-files.outputs.files_count }}" \
+            --lines-added "${{ steps.changed-files.outputs.lines_added }}" \
+            --lines-removed "${{ steps.changed-files.outputs.lines_removed }}" \
+            --languages "${{ steps.changed-files.outputs.languages }}" \
+            --workflow-run-id "${{ github.run_id }}" \
+            --workflow-run-url "https://github.com/${{ github.repository }}/actions/runs/${{ github.run_id }}" \
+            --config-file .quality/config.yml \
+            --credentials '${{ secrets.GOOGLE_SHEETS_CREDENTIALS }}' \
+            --sheet-id "${{ secrets.GOOGLE_SHEET_ID }}"
+        env:
+          GOOGLE_SHEETS_CREDENTIALS: ${{ secrets.GOOGLE_SHEETS_CREDENTIALS }}
+
+      # ============================================================
+      # FINAL STATUS
+      # ============================================================
+
+      - name: Check threshold
+        if: steps.score.outputs.passed == 'false'
+        run: |
+          echo "::warning::Quality score (${{ steps.score.outputs.score }}) is below threshold (${{ inputs.threshold || 70 }})"
+          # Note: We warn but don't fail the workflow as per requirements

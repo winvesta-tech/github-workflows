@@ -1,0 +1,33 @@
+# Code Quality Configuration
+# Copy this file to your repo: .github/quality-config.yml
+
+# ============================================================
+# SWIFT iOS REPO TEMPLATE
+# ============================================================
+
+languages:
+  - swift
+
+tests:
+  enabled: true
+  
+  # Commands to run before tests
+  setup:
+    - "pod install || true"  # Install CocoaPods if used
+  
+  # Test command - runs xcodebuild with coverage
+  command: |
+    xcodebuild test \
+      -workspace YourApp.xcworkspace \
+      -scheme YourApp \
+      -destination 'platform=iOS Simulator,name=iPhone 15' \
+      -enableCodeCoverage YES \
+      -resultBundlePath TestResults.xcresult
+  
+  # Path to coverage report
+  # Note: You may need xcov or similar to convert xcresult to a parseable format
+  coverage_file: "coverage.json"
+
+# E2E tests requirement  
+e2e:
+  required: false  # Set to true if you have UI tests

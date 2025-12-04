@@ -1,0 +1,35 @@
+# Code Quality Configuration
+# Copy this file to your repo: .github/quality-config.yml
+
+# ============================================================
+# JAVASCRIPT/TYPESCRIPT REPO TEMPLATE (e.g., React, Next.js)
+# ============================================================
+
+languages:
+  - javascript
+  - typescript
+
+tests:
+  enabled: true
+  
+  # Commands to run before tests
+  setup:
+    - "npm ci"
+  
+  # Test command with coverage
+  # For Jest:
+  command: "npm test -- --coverage --watchAll=false"
+  
+  # For Vitest:
+  # command: "npx vitest run --coverage"
+  
+  # Path to coverage report
+  # Jest outputs to coverage/lcov.info by default
+  coverage_file: "coverage/lcov.info"
+  
+  # Alternative: Istanbul JSON format
+  # coverage_file: "coverage/coverage-final.json"
+
+# E2E tests requirement
+e2e:
+  required: false  # Set to true if you have Cypress/Playwright tests

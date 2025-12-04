@@ -1,0 +1,25 @@
+# Code Quality Check
+# Copy this file to your repo: .github/workflows/quality.yml
+# Also create: .github/quality-config.yml (see template)
+
+name: Code Quality
+
+on:
+  pull_request:
+    types: [opened, synchronize, reopened]
+  
+  # Allow re-triggering via comment
+  issue_comment:
+    types: [created]
+
+jobs:
+  quality:
+    # Run on PR events, or when someone comments /quality-check on a PR
+    if: |
+      github.event_name == 'pull_request' ||
+      (github.event_name == 'issue_comment' && 
+       github.event.issue.pull_request && 
+       contains(github.event.comment.body, '/quality-check'))
+    
+    uses: winvesta-tech/github-workflows/.github/workflows/code-quality.yml@main
+    secrets: inherit

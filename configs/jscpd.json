@@ -1,0 +1,52 @@
+{
+  "threshold": 0,
+  "reporters": ["json", "console"],
+  "output": ".quality",
+  "ignore": [
+    "**/node_modules/**",
+    "**/vendor/**",
+    "**/dist/**",
+    "**/build/**",
+    "**/.git/**",
+    "**/coverage/**",
+    "**/__pycache__/**",
+    "**/venv/**",
+    "**/.venv/**",
+    "**/Pods/**",
+    "**/DerivedData/**",
+    "**/*.min.js",
+    "**/*.min.css",
+    "**/package-lock.json",
+    "**/yarn.lock",
+    "**/Podfile.lock",
+    "**/*.pb.go",
+    "**/*.generated.*"
+  ],
+  "format": [
+    "python",
+    "javascript",
+    "typescript",
+    "tsx",
+    "jsx",
+    "swift",
+    "kotlin",
+    "java"
+  ],
+  "minLines": 5,
+  "minTokens": 50,
+  "maxLines": 1000,
+  "maxSize": "100kb",
+  "skipLocal": false,
+  "absolute": false,
+  "gitignore": true,
+  "formatsExts": {
+    "python": ["py"],
+    "javascript": ["js", "mjs", "cjs"],
+    "typescript": ["ts"],
+    "tsx": ["tsx"],
+    "jsx": ["jsx"],
+    "swift": ["swift"],
+    "kotlin": ["kt", "kts"],
+    "java": ["java"]
+  }
+}

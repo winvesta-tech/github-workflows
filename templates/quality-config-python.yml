@@ -1,0 +1,27 @@
+# Code Quality Configuration
+# Copy this file to your repo: .github/quality-config.yml
+
+# ============================================================
+# PYTHON REPO TEMPLATE (e.g., FastAPI, Django)
+# ============================================================
+
+languages:
+  - python
+
+tests:
+  enabled: true
+  
+  # Commands to run before tests (install dependencies)
+  setup:
+    - "pip install -r requirements.txt"
+    - "pip install pytest pytest-cov"
+  
+  # Test command with coverage
+  command: "pytest --cov=src --cov-report=xml -v"
+  
+  # Path to coverage report (Cobertura XML format)
+  coverage_file: "coverage.xml"
+
+# E2E tests requirement
+e2e:
+  required: false  # Set to true if repo has E2E tests
