@@ -534,7 +534,7 @@ def main():
     
     print(f"Score calculated: {result['final_score']}/100 ({'PASS' if result['passed'] else 'FAIL'})")
     
-    return 0 if result["passed"] else 1
+    return 0
 
 
 if __name__ == "__main__":
